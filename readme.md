@@ -1,0 +1,1 @@
+This repo contains selected individual and group assignments I completed for the MS Data Science program at CUNY SPS. Folders are named by course and course number.
