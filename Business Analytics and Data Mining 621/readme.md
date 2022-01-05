@@ -5,19 +5,19 @@
 - *Metric*: Do our functions and the standard libraries return the same values? Yes.  
 
 ###### Crime
-- *Purpose*: 
-- *Process*: 
-- *Toolkit*: 
-- *Metric*: 
+- *Purpose*: Predict whether a neighborhood's crime rate lies above or below the city's median crime rate.  
+- *Process*: Perform exploratory analysis, variable transformations, logistic regression, model selection, and discuss results.  
+- *Toolkit*: Logistic regression in R, various libraries for analysis including caret, tidyverse, and pROC, and R Markdown formatting libraries like stargazer and knitr.  
+- *Metric*: We considered model parsimony, AIC, precision, accuracy, and AUC in selecting a model. Final model accuracy = 0.86 on test data.
 
 ###### Insurance
-- *Purpose*: 
-- *Process*: 
-- *Toolkit*: 
-- *Metric*: 
+- *Purpose*: Predict whether a given customer will be involved in a car crash, and predict the cost of the crash to an insurance company.  
+- *Process*: Perform exploratory analysis, variable transformations including imputation for missing values, logistic and OLS regression, and discuss results.  
+- *Toolkit*: Linear modeling in R, various libraries for analysis including caret, mice, tidyverse, and MASS, and R Markdown formatting libraries like flextable.  
+- *Metric*: AIC for logistic regression, r-squared for cost estimation.  
 
 ###### Wine Sales
-- *Purpose*: 
-- *Process*: 
-- *Toolkit*: 
+- *Purpose*: Predict wine sales based on chemical properties. Compare Poisson, negative binomial, and multiple linear regression models.  
+- *Process*: Perform exploratory analysis, variable transformations, model construction and selection, and generate predictions. Discuss results.  
+- *Toolkit*: Linear modeling in R.  
 - *Metric*: 
