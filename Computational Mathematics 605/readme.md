@@ -8,7 +8,7 @@
 - *Process*: Algebraic proof supported by geometric intuition.  
 - *Key concepts*: Geometric interpretation of matrix transformations, eigenvectors/values.  
 
-###### Exponential Family Problem SEt
+###### Exponential Family Problem Set
 - *Purpose*: Explore Bayesian probability concepts and various exponential family probability distributions.  
 - *Process*: Compute probabilities of various events using the appropriate distribution(s).  
 - *Key concepts*: Bayes' Theorem, exponential family distributions.  
