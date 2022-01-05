@@ -1,0 +1,167 @@
+---
+title: "Lubridate Vignette"
+author: "Daniel Moscoe"
+date: "4/6/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Introduction
+
+Lubridate contains functions that make it easier to work with dates and times. In this vignette we'll use Lubridate to assist with the following tasks:
+
+(1) Create date/time objects from strings;
+(2) Create date/time objects from individual components;
+(3) Use accessors to get/set individual components of a date/time object;
+(4) Use durations to perform arithmetic on date/times.
+
+Lubridate is part of the Tidyverse ecosystem of packages. Because Lubridate is not one of the core packages of Tidyverse, it needs to be imported separately.
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(lubridate)
+```
+
+#### About the data
+
+We'll work with a subset of the data from ["NY Bus Breakdown and Delays"](https://www.kaggle.com/new-york-city/ny-bus-breakdown-and-delays), referred to here as `delays`. The data have been modified slightly to better suit the instructional purpose of this vignette.
+
+`delays` contains information on 499 school bus delays during the school year beginning in 2018.
+
+```{r}
+delays <- read_csv(
+  url("https://raw.githubusercontent.com/dmoscoe/SPS/main/DATA607/delays.csv"), 
+  col_names = TRUE)
+head(delays)
+```
+
+
+
+#### Create date/time objects from strings
+
+`delays` contains date/times in a variety of formats. The column `created_on` gives a date for the creation of the record in the table. The date is given in yyyymmdd format, and R interprets each entry as a number.
+
+```{r}
+str(delays$created_on[1:5])
+```
+
+Lubridate includes functions to parse date/times from a variety of formats. The arrangement of the date information in the string to be parsed helps determine the Lubridate function to use. In the case of the strings in `delays$created_on`, the year occurs first, followed by the month, then the day. We use the corresponding Lubridate function, `ymd()`.
+
+```{r}
+delays$created_on <- ymd(delays$created_on)
+delays$created_on[1:5]
+str(delays$created_on[1:5])
+```
+
+Lubridate includes analogous parsing functions for date/times given in different orders. It can even accept months given as words.
+
+```{r}
+dmy('11 July 1999')
+```
+
+
+
+#### Create date/time objects from individual components
+
+The columns `occurred_on_yr`, `occurred_on_month`, `occurred_on_day`, and `occurred_on_time` contain date/time information given as individual components.
+
+```{r}
+delays %>%
+  select(occurred_on_yr, occurred_on_month, occurred_on_day, occurred_on_time)
+```
+
+After parsing the times in `occurred_on_time`, We can use `make_date()` to create dates that combine the information in these several components.
+
+```{r}
+
+delays$occurred_on_time <- delays$occurred_on_time %>%
+  hms()
+
+delays <- delays %>%
+  mutate(occurred_on = make_datetime(
+    year = occurred_on_yr, 
+    month = occurred_on_month, 
+    day = occurred_on_day, 
+    hour = hour(occurred_on_time), 
+    min = minute(occurred_on_time), 
+    tz = 'US/Eastern')
+    )
+
+delays$occurred_on[1:5]
+```
+
+Note the keyword argument `tz` in `make_datetime()`. To view a list of the almost 600 valid time zones, use `OlsonNames()`.
+
+```{r}
+head(OlsonNames())
+```
+
+
+
+#### Use accessors to get/set individual components of a date/time object
+
+In datasets containing times recorded by humans, it's common to see more "nice" times than expected. People have a tendency to approximate times by rounding to the nearest ten or fifteen minutes. Is this the case in `delays`? Let's investigate the minute component of the times in `occurred_on` to find out.
+
+We use the accessor function `minute()` to create a list of the minutes components of times in `occurred_on`.
+
+```{r}
+delays <- delays %>%
+  mutate(occurred_on_min = minute(occurred_on))
+
+delays$occurred_on_min[1:5]
+
+ggplot(data = delays, mapping = aes(x = occurred_on_min)) +
+  geom_histogram(bins = 30)
+```
+
+The histogram shows that delays are more commonly reported to have occurred at times ending in :00, :15, :30, or :45.
+
+We can also use accessors to set components of a date/time. The column `updated_on` contains many entries of 1/1/1900, which indicate missing data.
+
+```{r}
+delays$updated_on[1:5]
+```
+
+For demonstration purposes, let's change the month component of these first five 1/1/1900 entries to August. In order to do this, we first change the type of these dates from the default type for date/times, `POSIXct`, to Tidyverse `date`s.
+
+```{r}
+delays$updated_on <- date(delays$updated_on)
+month(delays$updated_on[1:5]) <- 8
+delays[1:10,c(1,2,3,20)]
+```
+
+Lubridate includes accessor functions for every component of a date/time.
+
+
+
+#### Use durations to perform arithmetic on date/times
+
+A duration is an amount of time in seconds. Durations help us perform arithmetic on date/times. Constructors for durations are as expected: `dseconds()`, `dminutes()`, `dhours()`, `ddays()`, `dweeks()`, and `dyears()`. Each constructor takes a value in the units indicated by the constructur, and returns the number of seconds.
+
+```{r}
+a <- dseconds(45)
+a
+
+b <- dhours(3)
+b
+
+c <- dweeks(2)
+c
+```
+
+We can use durations to combine lengths of time in different units. How long is 10 weeks, a month, and 19 days?
+
+```{r}
+dweeks(10) + dmonths(1) + ddays(19)
+```
+
+#### Summary
+
+Lubridate contains functions that make it easier to work with dates and times. Working with dates and times is essential but, at times, surprisingly complex, because calendars and time zones contain many inconsistencies. Some fundamental tasks when working with date/times include those described in this vignette: creating date/time objects from strings and from individual components; using accessors to get and set components of date/times; and performing computations using durations. Lubridate contains other functionality for working with time zones and for dealing with time spans under different assumptions.
+
+Valuable references drawn on for this vignette include Chapter 13 of *R for Data Science* by Hadley Wickham, and the [Lubridate cheat sheet](https://rawgit.com/rstudio/cheatsheets/master/lubridate.pdf).

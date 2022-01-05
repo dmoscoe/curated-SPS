@@ -1,0 +1,105 @@
+---
+title: "DATA 605 Wk12"
+author: "Daniel Moscoe"
+date: "4/19/2021"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+ab.dat <- read_csv(url("https://raw.githubusercontent.com/dmoscoe/SPS/main/abalone.csv"))
+colnames(ab.dat) <- c("sex", "length", "diam", "ht", "wh_wt", "shk_wt", "vi_wt", "shl_wt", "rings")
+```
+
+### Introduction
+
+This dataset was taken from the Machine Learning [Repository](https://archive.ics.uci.edu/ml/datasets/Abalone) at UC Irvine. Measurements are from specimens of abalone, and the goal is to predict `rings`, which is equal to the abalone's age in years minus 1.5. The independent variables are:
+
+`sex`, M (male), F (female), I (infant)  
+`length`, longest shell measurement in mm  
+`diam`, diameter perpendicular to length in mm  
+`ht`, height with meat in shell in mm  
+`wh_wt`, whole weight in g  
+`shk_wt`, shucked weight of meat in g  
+`vi_wt`, viscera weight after bleeding in g  
+`shl_wt`, shell weight after drying in g  
+
+### Preliminaries
+
+The variable `sex` is qualitative with three levels. We can account for this information with two dichotomous variables, `male` and `female`.
+
+```{r}
+ab.dat <- ab.dat %>%
+  mutate("male" = ifelse(ab.dat$sex == "M", 1, 0)) %>%
+  mutate("female" = ifelse(ab.dat$sex == "F", 1, 0)) %>%
+  select(length:female)
+```
+
+As an experiment, let's include some squared terms and a dichotomous-quantitative interaction term in our data set so we can see how they behave in the linear model. We can square all the measurements of length, and include an interaction variable between `male` and `shl_wt`. Maybe the shells of male abalone are different than the shells of females-- who knows!
+
+```{r}
+ab.dat <- ab.dat %>%
+  mutate("length_sq" = length^2) %>%
+  mutate("diam_sq" = diam^2) %>%
+  mutate("ht_sq" = ht^2) %>%
+  mutate("male_by_shl_wt" = male * shl_wt)
+```
+
+### The linear model
+
+We begin by including all variables in the linear model. We'll follow the strategy of backward elimination described in the textbook.
+
+```{r}
+ab.lm <- lm(rings ~ length + diam + ht + length_sq + diam_sq + ht_sq + wh_wt + shk_wt + vi_wt + shl_wt + male + male_by_shl_wt + female, data = ab.dat)
+summary(ab.lm)
+```
+
+The residuals appear to be centered near 0 and are approximately symmetric about their center. We don't know if they're normally distributed yet, but results so far look promising. Our goal now is to remove variables with high p-values. This will create a simpler model and help avoid overfitting. It may also raise the adjusted R-squared, and not significantly reduce the multiple R-squared. The variable with greatest p value is `length`, so it is the first to go. We re-fit the model without `length`. 
+
+```{r}
+ab.lm <- lm(rings ~ diam + ht + length_sq + diam_sq + ht_sq + wh_wt + shk_wt + vi_wt + shl_wt + male + male_by_shl_wt + female, data = ab.dat)
+summary(ab.lm)
+```
+
+Dropping `length` simplifies the model and has no meaningful effect on either R-squared. Let's remove the next least significant variable, our dichotomous-quantitative interaction variable, `male_by_shl_wt`.
+
+```{r}
+ab.lm <- lm(rings ~ diam + ht + length_sq + diam_sq + ht_sq + wh_wt + shk_wt + vi_wt + shl_wt + male + female, data = ab.dat)
+summary(ab.lm)
+```
+
+The results after removing this variable are similar to the earlier results, but our model is simpler now. All remaining variables are significant with p < 0.001.
+
+Our linear model is complete. The coefficient $a_{i}$ on each variable $x_{i}$ means that, on average, a one unit increase in $x_{i}$ is associated with a $a_{i}$ change in `rings`. For quadratic terms `length_sq` and `diam_sq`, the average change in `rings` associated with a change in the variable depends on the value of the variable. For both `length_sq` and `diam_sq`, the predicted change in `rings` decreases faster and faster as the variables increase.
+
+### Residual analysis
+
+Are the residuals random noise normally distributed about 0?
+
+```{r}
+plot(fitted(ab.lm), resid(ab.lm))
+```
+
+The striations in the plot are an artifact of the integer values of `rings`. Setting aside these striations, the residuals do appear to be roughly centered at 0, although their variability appears to increase as the model predicts larger and larger values. 
+
+```{r}
+qqnorm(resid(ab.lm))
+qqline(resid(ab.lm))
+```
+
+The Q-Q plot shows that the residuals are not normally distributed at the upper tail.
+
+```{r}
+hist(resid(ab.lm))
+```
+
+The histogram also reveals skewness in the residuals.
+
+Overall, the deviation from normality in the residuals means that our model does not completely account for variability in `rings`, and that there is a pattern in the data that is not captured by our model. However, the model did a good job of accounting for the variability in `rings` near the mean, as shown in the Q-Q plot. Overall, this model appears to have some utility, but it must be used with caution, especially for larger values of `rings`. 

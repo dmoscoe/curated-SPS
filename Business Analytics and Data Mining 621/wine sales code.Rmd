@@ -1,0 +1,625 @@
+---
+title: "Wine Sales"
+author: "Biguzzi, Connin, Greenlee, Moscoe, Sooklall, Telab, and Wright"
+date: "12/03/2021"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 8, out.width = "100%")
+```
+
+```{r, include = FALSE}
+library(dplyr)
+library(flextable)
+library(dlookr) # for data exploration & imputation
+library(corrplot) # for visualization variable correlations
+library(ggplot2)
+library(tidyr) # for gather function
+library(MASS) # for glm.nb function at negative binomial
+library(AER) # for checking dispersion function
+library(caret) #for confusionmatrix
+library(pscl) # for zero inflation modeling 
+
+raw <- read.csv("https://raw.githubusercontent.com/rachel-greenlee/data621/main/HW5_count/wine-training-data.csv")
+eval <- read.csv("https://raw.githubusercontent.com/rachel-greenlee/data621/main/HW5_count/wine-evaluation-data.csv")
+
+
+```
+
+
+## Introduction
+
+Using the information about sample wine orders by restaurants and wine stores after a tasting, how can we predict wine sales by various wine characteristics? Using the `wine` dataset with 12,000 entries and variables mostly related to the chemical properties of each wine, we will build a count regression model to predict the number of cases of wine that will be sold. In practice, if a wine manufacturer can predict which wines will lead to greater sales, they can choose to offer those at more tastings in restaurants and wine stores.  
+
+Using the training data set we will build:  
+
+* four different poisson regression models
+* three different negative binomial regression models
+* two different multiple linear regression models
+
+In this report we will:
+
+* explore the data
+* transform the data to meet conditions of count modeling
+* compare models
+* select an optimal model
+* generate predictions for the evaluation data set
+
+\newpage
+
+## Data Exploration
+
+As part of our initial data exploration below, we find the following issues that will be handled in the Data Preparation section: 
+
+* large amounts of negative values for 8 of the chemical measures, which should be adjusted to 0
+* 26.25% of cases have a missing `STARS` value
+* `LabelAppeal` and `STARS` have imported as integers, but as could be interpreted as categorical variables due to lack of continuity
+* many of the chemical variables could benefit from log transformations, after seeing the normality plots
+* very few variables are correlated with the `TARGET` beyond `STARS` and `LabelAppeal`, consider dropping some
+
+
+### First Look
+
+Taking a look at the structure of the dataset we have 12,795 cases and 14 potential predictor variables. All variables are numeric. We'll remove the `INDEX` variable as it isn't needed in model building.
+
+```{r}
+str(raw)
+
+# remove first column, INDEX
+raw <- raw[-1]
+```
+
+
+The table below shows the range of the TARGET (# cases purchased) ranges from 0 - 8. We also see a large amount of negative values across some of the chemical variables. We will need to deal with these values and/or cases later. 
+
+```{r}
+raw %>%
+    diagnose_numeric() %>%
+    dplyr::select(variables, min, mean, median, max, zero, minus) %>%
+    flextable(theme_fun = theme_booktabs()) %>%
+    colformat_double(digits = 2)
+```
+
+
+### Checking for Normality
+
+
+We check the distribution of all of the predictor variables with boxplots. All variables except for `STARS` and `LabelAppeal` appear to have a small IQRs with large ranges of outliers. This could limit the type of modeling that is appropriate to those don't have strict normality assumptions.
+```{r}
+raw %>%
+  gather() %>%
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free", ncol = 3) +
+  geom_boxplot() +
+  ggthemes::theme_fivethirtyeight()
+
+```
+
+
+Using the Shapiro-Wilk normality test on each of the variables, we see all of the p-values are less than 0.05 which means none of our variables are normally distributed in their raw form.
+
+```{r}
+raw %>% 
+  normality() %>%
+  arrange(desc(p_value)) %>%
+    flextable(theme_fun = theme_booktabs()) %>%
+    colformat_double(digits = 3)
+
+```
+
+
+Below we visualize with a histogram and Q-Q plot for each variable for which we want to check for normality, excluding the `TARGET` variable and variables we will convert to factors later. It appears that all 11 of the variables would benefit from a log transformation, which will likely become even more necessary once we correct for the un-interpretable negative values many of these variables have in the original dataset.
+
+```{r}
+# normality plots for all numeric dependent variables
+raw %>%
+  dplyr::select(-TARGET, -LabelAppeal, -STARS, -AcidIndex) %>%
+  plot_normality()
+```
+
+\newpage
+
+### Missingness
+
+With regards to missingness, we have 6 variables with data for every case. This leaves 8 variables that have some degree of missing data, with the worst being the `STARS` variable with 26.25% of cases missing a value for `STARS` (the wine rating by experts). None of the remaining 7 variables have more than 10% missing, so imputing values will be considered.
+
+```{r}
+# check for missing values
+raw %>%
+    diagnose() %>%
+    dplyr::select(-unique_count, -unique_rate) %>%
+    filter(missing_count > 0) %>%
+    arrange(desc(missing_count)) %>%
+    flextable(cwidth = 1.2) %>%
+    colformat_double(digits = 2)
+```
+
+
+
+Looking for patterns in missingness can be telling. Below the 8 variables with at least some missingness are plotted for the top 30 most frequent combinations of missing values.  
+
+We don't see any major relationships of missingness that affect a large number of cases in the dataset.
+```{r, fig.height=6}
+
+# plotting patterns in missingness of top 6 most-missing variables
+raw %>% 
+  plot_na_intersect(only_na = TRUE, typographic = FALSE, n_intersacts = 30)
+
+```
+\newpage
+
+### Correlation
+
+We see a very sparse correlation plot below. `LabelAppeal` and `STARS` jump out as having the largest positive correlation with `TARGET`, with a faint negative correlation between `AcidIndex` and the `TARGET`. We also see a correlation between `LabelAppeal` and `STARS`.
+
+```{r}
+# create corr values
+correlation <- cor(raw, use = "complete.obs") 
+
+# plot correlations
+corrplot.mixed(correlation, tl.col = 'black', tl.pos = 'lt', number.cex= 11/ncol(raw))
+```
+
+
+\newpage
+
+### Check for Outliers
+
+The table below shows the count and percent of outliers within each variable arranged with the highest outlier count starting at the top. The outliers_ratio shows the percent of outliers identified withing all cases, which is greater than 5% for the first 12 variables. We will recheck that table after transformations in the Data Preparation section.
+
+```{r}
+diagnose_outlier(raw) %>%
+  arrange(desc(outliers_cnt)) %>% 
+  mutate_if(is.numeric, round , digits=3) %>% 
+  flextable() 
+```
+
+
+\newpage
+
+## Data Preparation
+
+To address the issues in the data we discovered in the data exploration section, we will:
+
+* **CHANGE DATA TYPE** to factors for `STARS`, interpreting as categorical variables due to lack of continuity
+* **Bucket `LabelAppeal` Ratings** into Negative, Neutral, and Positive scores
+* **ASSIGN ZERO to all negative values** for 8 of the chemical measures 
+* **IMPUTE missing values** for variables (except `STARS`) using the median
+* **Create missing `STARS` variable** for 26.25% of cases that have a missing `STARS` value
+* **Drop variables** that have no correlation to `TARGET` even after above transformations
+* **LOG transformation** for all of the numeric chemical variables that were not normally distributed
+* **Recheck** normality, outliers, and correlation
+
+
+### Change Data Type of `STARS`
+
+We set the `STARS` variable as a factor as it's a rating and not a continuous scale.
+
+```{r}
+raw$STARS <- as.factor(raw$STARS)
+```
+
+### Bucket `LabelAppeal` Ratings
+
+Switch `LabelAppeal` to a factor after coding the ratings into buckets of Negative, Neutral, and Positive. This will be easier to interpret as well. The boxplots after this change show how increased `LabelAppeal` seems to be positively associated with the `TARGET`.
+
+
+```{r}
+raw$LabelAppeal_factor <- ifelse(raw$LabelAppeal < 0,1,ifelse(raw$LabelAppeal==0,2,3))
+raw$LabelAppeal_factor <- as.factor(raw$LabelAppeal_factor)
+levels(raw$LabelAppeal_factor) <- c('Negative','Neutral','Positive')
+
+# boxplot of new 3-level factors against target
+raw %>%
+  ggplot(aes(LabelAppeal_factor,TARGET))+
+  geom_boxplot()+
+  theme_classic()
+```
+
+
+### Fix Negative Values
+
+With 21,766 negative values across many of the chemical variables, for which it doesn't make sense to have a negative value, we convert these to positive zero so we retain some value (as opposed to omitting these measures or cases). Variables include: `FixedAcidity`, `VolatileAcidity`, `CitricAcid`, `ResidualSugar`, `Chlorides`, `FreeSulfurDioxide`, `TotalSulfurDioxide`, `Sulphates`, `Alcohol`.  
+
+It's very common in chemical analyses that negative values reflect sample concentrations below the instrumental detection limit, thus we feel justified in treating these measures as zero.
+
+```{r}
+
+# switch any negative values to zero
+raw$FixedAcidity[raw$FixedAcidity < 0] <- 0
+raw$VolatileAcidity[raw$VolatileAcidity < 0] <- 0
+raw$CitricAcid[raw$CitricAcid < 0] <- 0
+raw$ResidualSugar[raw$ResidualSugar < 0] <- 0
+raw$Chlorides[raw$Chlorides < 0] <- 0
+raw$FreeSulfurDioxide[raw$FreeSulfurDioxide < 0] <- 0
+raw$TotalSulfurDioxide[raw$TotalSulfurDioxide < 0] <- 0
+raw$Sulphates[raw$Sulphates < 0] <- 0
+raw$Alcohol[raw$Alcohol < 0] <- 0
+```
+
+
+### Impute Missing Values
+
+For the 7 variables that had <10% missing values, we will impute the missing values with the median for that variable. Variables include: `ResidualSugar`, `Chlorides`, `FreeSulfurDioxide`, `TotalSulfurDioxide`,  `pH`, `Sulphates`, `Alcohol`.
+
+```{r}
+raw <- raw %>%
+  mutate(
+  ResidualSugar = ifelse(is.na(ResidualSugar), median(ResidualSugar, na.rm = T), ResidualSugar),
+  Chlorides = ifelse(is.na(Chlorides), median(Chlorides, na.rm = T), Chlorides),
+  FreeSulfurDioxide = ifelse(is.na(FreeSulfurDioxide), median(FreeSulfurDioxide, na.rm = T), FreeSulfurDioxide),
+  TotalSulfurDioxide = ifelse(is.na(TotalSulfurDioxide), median(TotalSulfurDioxide, na.rm = T), TotalSulfurDioxide),
+  pH = ifelse(is.na(pH), median(pH, na.rm = T), pH),
+  Sulphates = ifelse(is.na(Sulphates), median(Sulphates, na.rm = T), Sulphates),
+  Alcohol = ifelse(is.na(Alcohol), median(Alcohol, na.rm = T), Alcohol))
+```
+
+
+### Flag `STARS` Missing Values
+With 26.25% of cases missing a `STARS` rating, we need to consider if we should drop the variable from modeling, impute the missing values, or flag these cases. There are some guidelines in data science that if there are beyond 30% missing values, the variable may be best dropped. Theoretically, the `STARS` variable should represent something close to our `TARGET` variable as we'd expect a relationship between high expert reviews and high case sales.  
+
+Since this seems like too valuable of a variable to drop, and considering that depending on how the `STARS` data was obtained, a missing value could indicate a lesser quality or less popular wine (such that it hasn't been rated by experts), we choose to create a new variable where a '1' indicates a missing `STARS` value. We leave the NAs in the original `STARS` variable. We set the `STARS_new` variable as a factor with 5 levels.  
+
+The box plots below show increasing sales as the star rating increasing, which is intuitive.
+
+```{r}
+# create new variable to flag if it's a missing value
+raw <- raw %>%
+  mutate(
+    STARS_new = ifelse(is.na(STARS),0,STARS)
+  )
+
+# set as factor
+raw$STARS_new <- as.factor(raw$STARS_new)
+levels(raw$STARS_new) <- c('no rating','one star','two star','three star','four star')
+
+# check boxplots for new variable against target
+raw %>%
+  ggplot(aes(STARS_new,TARGET)) +
+  geom_boxplot()+
+  theme_classic()
+```
+
+### Drop Variables
+
+The correlation plot below show that, even after some of the above transformations, the majority of the numeric variables are not correlated with the `TARGET`. We choose to drop `FixedAcidity`, `VolatileAcidity`, `CitricAcid` as theoretically they should be represented in the `AcidIndex`. 
+
+
+```{r}
+#remove factor variables so corrplot will run
+raw_numeric <- dplyr::select(raw, -c('STARS_new', 'LabelAppeal_factor', 'STARS'))
+
+# create corr values
+correlation2 <- cor(raw_numeric, use = "complete.obs") 
+
+# plot correlations
+corrplot.mixed(correlation2, tl.col = 'black', tl.pos = 'lt', number.cex= 11/ncol(raw_numeric))
+
+# drop 3 acid variables
+raw <- dplyr::select(raw, -c('FixedAcidity', 'VolatileAcidity', 'CitricAcid'))
+
+```
+
+
+
+### Preform Log Transformations
+
+The normality plots earlier identified the following variables could benefit from log transformations, which is even more true after having taken adjusted the negative values to zero. Variables include: `ResidualSugar`, `Chlorides`, `FreeSulfurDioxide`, `TotalSulfurDioxide`, `Density`, `PH`, `Sulphates`, and `Alcohol`.
+```{r}
+# We also add 0.00000001 to the new value in order to avoid any values of zero for which there is no defined log value while not affect the variables 
+# distribution greatly.
+
+raw$log_ResidualSugar <- log(raw$ResidualSugar + 0.00000001)
+raw$log_Chlorides <- log(raw$Chlorides + 0.00000001)
+raw$log_FreeSulfurDioxide <- log(raw$FreeSulfurDioxide + 0.00000001)
+raw$TotalSulfurDioxide <-  log(raw$TotalSulfurDioxide + 0.00000001)
+raw$log_Density <- log(raw$Density + 0.00000001)
+raw$log_PH <- log(raw$pH + 0.00000001)
+raw$log_Sulphates <- log(raw$Sulphates + 0.00000001)
+raw$log_Alcohol <- log(raw$Alcohol + 0.00000001)
+```
+
+
+
+### Re-Run Normality, Outlier, & Correlation Plots
+
+After all of the above changes, we check the dataset below. We've dropped the pre-logging variables for simplicity. In seeing the differences in mean and median within variables we still detect significantly skewed datapoints for the logged chemical variables.
+
+```{r, fig.width=7}
+# drop original variables that are now logged
+raw <- dplyr::select(raw, -c('ResidualSugar', 'Chlorides', 'FreeSulfurDioxide',
+                                     'TotalSulfurDioxide', 'Density', 'pH', 'Sulphates', 'Alcohol'))
+
+# summary plot
+raw %>%
+    diagnose_numeric()%>%
+    dplyr::select(variables, min, mean, median, max, zero, minus)%>%
+    flextable(theme_fun = theme_booktabs()) %>%
+    colformat_double(digits = 2)
+```
+
+Next we check the outlier table to see if we still have great than 5% of data points identified as outliers in a large proportion of the chemical variables.  It appears we have normalized some of the outliers with the above transformations, but many still have more than 5% of values identified as outliers.
+
+
+```{r}
+diagnose_outlier(raw) %>%
+  arrange(desc(outliers_cnt)) %>% 
+  mutate_if(is.numeric, round , digits=3) %>% 
+  flextable() 
+```
+
+
+Creating a new correlation plot with our transformed numeric variables it appears there is still very little correlation between our `TARGET` variable and any of these chemical measures with the exception of `AcidIndex`. At this point the `LabelAppeal`, `AcidIndex`, and earlier we saw the `STARS` variable have the strongest correlations with the `TARGET`.
+
+
+```{r}
+#remove factor variables so corrplot will run
+raw_numeric <- dplyr::select(raw, -c('STARS_new', 'LabelAppeal_factor', 'STARS'))
+
+# create corr values
+correlation2 <- cor(raw_numeric, use = "complete.obs") 
+
+# plot correlations
+corrplot.mixed(correlation2, tl.col = 'black', tl.pos = 'lt', number.cex= 11/ncol(raw_numeric))
+```
+\newpage
+
+## Build Models
+
+Our prompt asks us to build at least two of three different models: *poisson*, *negative binomial*, and *multiple linear regression*. As there appears to be no correlation to our `TARGET` from the logged chemical variables beyond `AcidIndex`, we won't include those in any of the following models.
+
+
+### The Poissons
+
+```{r}
+# only include variables that had promise in correlation plot
+m_pois_1 <- glm(TARGET ~ AcidIndex + STARS_new + LabelAppeal_factor, family = "poisson", raw)
+
+## all variables, except original STARS (so it doesn't drop NAs)
+m_pois_2 <- glm(TARGET ~ ., family = "poisson", raw[,c(1,3,5:13)])
+
+# try backwards step from previous model
+m_pois_3 <- step(m_pois_2, selection='backwards', trace = F)
+
+# try zero-inflated poisson to account for large counts of zero
+m_pois_4 <- zeroinfl(TARGET ~ AcidIndex + STARS_new + LabelAppeal_factor, raw)
+```
+
+Poisson distributions are used for count data and relies on the distribution generally have a mean = variance. Poisson is particularly useful when the counts are small, if they are larger we may be able to get use out of a linear regression (which we'll try later).
+
+
+First we model based on the `AcidIndex`, `STAR_new`, and `LabelAppeal_factor` variables. It appears all have significant p-values. We see a residual deviance of 13,776 which is greater than the 12,787 degrees of freedom - this suggests over-dispersion could exist so we need to check that more carefully. Finally, comparing the null deviance (a model with only the intercept) we see that we have a greatly lower residual deviance for  the 8 degrees of freedom we lost in adding our predictive variables. This means the model we built fits better than the null.
+
+
+```{r}
+summary(m_pois_1)
+```
+
+We calculate the dispersion parameter that's based on Pearson's Chi-squared statistic and the degrees of freedom with a function from the AER library. A value over 1 indicates over-dispersion, which in this case we do not find as we have a value of 0.897. Generally a value greater than 1.10 is considering dispersed, so we extend this rational to say a value of nearly 0.9 is close enough to 1.0 to not be concerned about dispersion issues. 
+
+
+```{r}
+dispersiontest(m_pois_1)
+```
+
+When calculating the dispersion mathematically and adding it to the summary, we can see that because the dispersion is below 1 the p-values and coefficients stay the same, while the Std. Error are slightly smaller and the z value slightly larger. This further proves that our data and model is not suffering from an overdispersion problem.
+
+```{r}
+dp1 = sum(residuals(m_pois_1,type ="pearson")^2)/m_pois_1$df.residual
+dp1
+```
+
+```{r}
+summary(m_pois_1,dispersion=dp1)
+```
+
+
+For our second poisson model we include all variables, except for the original `STARS` rating. A dispersion check yields a `r round(dispersiontest(m_pois_1)$estimate,3)` value, which is not cause for concern.
+
+The model below shows that `log_ResidualSugar`, `log_Density`, `log_PH`, and `log_Sulphates` do not have significant p-values. Despite low values in the correlation plots earlier, it does appear that `log_Chlorides`, `log_FreeSulfurDioxide`, and `log_Alcohol` are significant at this stage. 
+
+```{r}
+summary(m_pois_2)
+```
+
+
+```{r}
+dispersiontest(m_pois_2)
+```
+
+
+For our third poisson model we use backwards selection on the above model to see if we can simplify the model. 
+
+
+```{r}
+summary(m_pois_3)
+```
+
+
+For our fourth and final Poisson Model, we see if using a Zero-Inflated Poisson Model is valuable, as this can account for having a large amount of count data as zero.
+
+```{r}
+summary(m_pois_4)
+```
+
+
+The AIC value is used when one wants to balance goodness of fit and a penalty for model complexity. This measure is generally considered better than others when prediction is the aim of the project, which is true in our case.  
+
+Poisson Model #1 had an AIC of `r m_pois_1$aic`.  
+Poisson Model #2 had an AIC of `r round(m_pois_2$aic,0)`.  
+Poisson Model #3 had an AIC of `r round(m_pois_3$aic,0)`.  
+
+These are all very similar, but Poisson Model #3 that used backwards elimination on the fullest model has the best AIC score. However, Poisson Model #4 that used a zero-inflated Poisson model accounts for the large number of zero-count data in our dataset.
+
+In order to see how Poisson Model #3 compares to Poisson Model #4 using a zero-inflated model we use the Vuong Non-Nested Hypothesis Test-Statistic. Our test statistic is significant, which means the zero-inflated model is preferable to the standard Poisson model using backwards elimination.
+
+```{r}
+vuong(m_pois_3, m_pois_4)
+```
+
+
+\newpage
+
+### The Negative Binomials
+```{r}
+m_binom_1 <- glm.nb(TARGET ~ AcidIndex + STARS_new + LabelAppeal_factor, raw)
+
+m_binom_2 <- glm.nb(TARGET ~ ., raw[,c(1,3,5:13)])
+
+m_binom_3 <- step(m_binom_2, selection='backwards', trace=F)
+```
+
+Generally the Negative Binomial is used in favor of the Poisson when the response variable is a count but the mean does not equal the variance. Further if there is overdispersion a Negative Binomial should be used instead of a Poisson. That doesn't appear to be the case with our data, but we will take a look. 
+
+Our first Negative Binomial model uses the same 3 variables as the first Poisson model, `Acid Index`, `STARS_new`, and `LabelAppeal_factor`.  
+
+The AIC of `r round(m_binom_1$aic,0)` is extremely close to the parallel Poisson model which had an AIC of `r round(m_pois_1$aic,0)`.
+
+```{r}
+summary(m_binom_1)
+```
+
+
+
+For our second Negative Binomal model, we use all variables except the original `STARS` variable (before it was re-coded into `STARS_new`).
+
+This is the lowest AIC we've see so far, at `r round(m_binom_2$aic,0)``.
+
+```{r}
+summary(m_binom_2)
+```
+
+
+
+For the third Negative Binomial we perform backwards selection on the above binomial model. This results in the lowest AIC yet at `r round(m_binom_3$aic,0)`.
+
+```{r}
+summary(m_binom_3)
+```
+
+Negative Binomial Model #1 had an AIC of `r round(m_binom_1$aic,0)`.  
+Negative Binomial Model #2 had an AIC of `r round(m_binom_2$aic,0)`. 
+Negative Binomial Model #3 had an AIC of `r round(m_binom_3$aic,0)`. 
+
+Once again, the 3rd model has the best AIC score.
+
+\newpage
+
+### The Multiple Linears  
+
+```{r}
+# just variables that showed up in correlation plot
+m_mlin_1 <- lm(TARGET ~ AcidIndex + STARS_new + LabelAppeal_factor, raw)
+
+# starting with subset of variables used on  model 2 in earlier section, and jump
+# right to the backwards elimination step
+m_mlin_full <- lm(TARGET ~ ., raw[,c(1,3,5:13)])
+m_mlin_2 <- step(m_mlin_full, selection='backwards', trace = F)
+
+```
+
+
+Theoretically, a linear regression is not a good choice for count data and further not a good choice when we have had some troubles with this dataset with respect to normality.  
+
+First, we try a model with the 3 variables we started with in the Poisson and Negative Binomial sections, `AcidIndex`, `STARS_new`, and `LabelAppeal_factor`. The Adjusted R-squared of 0.533 means that the model can explain 53.3% of the variance in the data. 
+
+```{r}
+summary(m_mlin_1)
+```
+
+Second, we run a full model using all variables (except the original `STARS`) and then perform backwards selection. We obtain a very similar Adjusted R-Squared that means the model can explain 53.4% of the variance in the data. For the sake of simplicity we would consider the first Multiple Linear Regression model 'best' as it would be easier to explain the relationship between the predictive variables and the target.
+
+
+```{r}
+summary(m_mlin_2)
+```
+
+\newpage
+
+## Model Selection
+
+While we cannot directly compare the Adjusted R-squared values of the Multiple Linear Regression models to the AIC values in the Poisson and Negative Binomial models, we know that linear regression models are based on assumptions of normality that are not present in our data - so we don't consider these as options for our final model. Another assumption for linear regression is for there to be no correlation between the fitted and residual values. When we looked at the fitted vs residual plots in the linear regression models, there seems to be a negative correlation between the two, strengthening our decision to not use the linear models.
+
+We saw the Negative Binomial and Poisson models perform very similarly with regard to the AIC values, in both the 3rd model that used backwards elimination from the full value were best. However, the first model of each, that contained `STARS_new`, `AcidIndex`, and `LabelAppeal_factor` are the easiest to explain with interpretable coefficients. It makes theoretical sense that higher expert star ratings and attractive labels would increase sales, and that higher acidity in wine may be less palatable to most and decrease sales.
+
+In looking at models 1 & 3 from the Poisson and Negative Binomials, we see very similar accuracy ratings when tested against our original dataset, all around 29%. 
+
+Further, Poisson Model #4 made use of a zero-inflated Poisson model to account for the large number of zeros we had in our count data. This model was also based on the 3 most interpretable factors (same as Poisson #1). The Vuong Non-Nested Hypothesis Test-Statistic revealed this performed better than any of the other Poisson models as well.
+
+A quick check of the accuracy of the considered models (Poisson #1, #3, and #4 in order below) also confirms the accuracy, at least on the training dataset, is higher on the zero-inflated model at 33.5% as opposed to around 29% for the other models.
+
+```{r}
+# creating predicted values from models
+raw$m_pois_1 <- round(predict(m_pois_1,raw,type='response'))
+raw$m_pois_3 <- round(predict(m_pois_3,raw,type='response'))
+raw$m_pois_4 <- round(predict(m_pois_4,raw,type='response'))
+
+# checking accuracy
+cm_pois_1 <- confusionMatrix(as.factor(raw$m_pois_1),as.factor(raw$TARGET))
+cm_pois_1$overall['Accuracy']
+
+cm_pois_3 <- confusionMatrix(as.factor(raw$m_pois_3),as.factor(raw$TARGET))
+cm_pois_3$overall['Accuracy']
+
+cm_pois_4 <- confusionMatrix(as.factor(raw$m_pois_4),as.factor(raw$TARGET))
+cm_pois_4$overall['Accuracy']
+
+```
+
+**We choose to move forward with the fourth zero-inflated Poisson model, as theoretically a Poisson model is more appropriate for our dataset than a Negative Binomial and because it is easiest to interpret than the backward selection models. This model is based on the `AcidIndex`, `STAR_new`, and `LabelAppeal_factor` variables, where having a higher star rating, more positive label appeal, and less acidity increase the predicted number of cases sold after sampling. We predict that a wine distributor should experience higher case sales after choosing to sample wines that balance these qualities appropriately.**
+
+
+
+Zero-Inflated Poinsson Models prediction accuracy on the training set. 
+
+```{r}
+raw$m_pois_4_color <- ifelse(raw$m_pois_4!=raw$TARGET,'wrong','correct')
+
+raw %>%
+  ggplot(aes(TARGET,m_pois_4,color=m_pois_4_color))+
+  geom_jitter()+
+  theme_classic()
+```
+
+
+
+
+```{r}
+##adding needed variables to eval dataset so we can run prediction
+
+# Label Appeal
+eval$LabelAppeal_factor <- ifelse(eval$LabelAppeal < 0,1,ifelse(eval$LabelAppeal==0,2,3))
+eval$LabelAppeal_factor <- as.factor(eval$LabelAppeal_factor)
+levels(eval$LabelAppeal_factor) <- c('Negative','Neutral','Positive')
+
+# create STARS_new variable
+eval <- eval %>%
+  mutate(
+    STARS_new = ifelse(is.na(STARS),0,STARS)
+  )
+
+eval$STARS_new <- as.factor(eval$STARS_new)
+levels(eval$STARS_new) <- c('no rating','one star','two star','three star','four star')
+
+
+
+#run and save predictions
+pred_cases_sold <- predict(m_pois_4, eval)
+eval$pred_TARGET <- pred_cases_sold
+write.csv(eval, "C:/Users/rgreenlee/Documents/ds_projects/data621/HW5_count/hw5_group1_predictions.csv", row.names = FALSE)
+```
+
+
+
+
+
+### Resources Used 
+
+https://www.dataquest.io/blog/tutorial-poisson-regression-in-r/  
+https://cran.r-project.org/web/packages/GlmSimulatoR/vignettes/count_data_and_overdispersion.html  
+https://towardsdatascience.com/adjust-for-overdispersion-in-poisson-regression-4b1f52baa2f1  
+https://stats.idre.ucla.edu/r/dae/zip/
+

@@ -1,0 +1,952 @@
+---
+title: "Crime Prediction"
+author: "Biguzzi, Connin, Greenlee, Moscoe, Sooklall, Telab, and Wright"
+date: "10/15/2021"
+header-includes:
+  - \usepackage{dcolumn}
+output: 
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = F, results = 'asis', comment = NA, warning = F, message = F)
+options(knitr.kable.NA = '')
+```
+
+```{r, message=F}
+#import packages
+library(tidyverse)
+library(yardstick)
+library(pROC)
+library(caret)
+library(regclass)
+library(scales)
+library(car)
+library(corrplot)
+library(ggthemes)
+library(stargazer)
+library(patchwork)
+library(knitr)
+```
+
+```{r, message = F}
+#read data
+# dftest = read_csv('crime-evaluation-data_modified.csv')
+url = 'https://raw.githubusercontent.com/sbiguzzi/data621/main/crime-training-data_modified.csv'
+raw = read.csv(url)
+```
+
+# Introduction
+Is it possible to predict whether a neighborhood's crime rate will be above or below the city's median crime rate? In this report we will attempt to answer this question using logistic regression techniques. The `crime` dataset provided could show which variables are instrumental in crime prediction. Understanding and identifying variables where there are differences within the two target groups are essential to predicting other neighborhoods not in the dataset.
+
+In this report we will: 
+
+* Explore the data
+* Transform data to address multicollenearity and meet variable distribution needs
+* Compare different models and select the most accurate model
+* Test our model on the evaluation dataset
+
+```{r}
+#Convert factor vars to factor
+raw$chas_fact <- as.factor(raw$chas)
+levels(raw$chas_fact) <- c('no river border','river border')
+raw$target_fact <- as.factor(raw$target)
+levels(raw$target_fact) <- c("below median","above median")
+```
+```{r, include=F}
+#create each histogram for numeric data
+h1 <- raw %>% 
+  ggplot(aes(zn)) +
+  geom_histogram(bins = 20) +
+  ggtitle("zn hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h2 <- raw %>%
+  ggplot(aes(indus)) +
+  geom_histogram(bins = 20) +
+  ggtitle("indus hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h3<-raw %>%
+  ggplot(aes(nox)) +
+  geom_histogram(bins = 20) +
+  ggtitle("nox hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h4<-raw %>%
+  ggplot(aes(rm)) +
+  geom_histogram(bins = 20) +
+  ggtitle("rm hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h5<-raw %>%
+  ggplot(aes(age)) +
+  geom_histogram(bins = 20) +
+  ggtitle("age hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h6<-raw %>%
+  ggplot(aes(dis)) +
+  geom_histogram(bins = 20) +
+  ggtitle("dis hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h7<-raw %>%
+  ggplot(aes(rad)) +
+  geom_histogram(bins = 20) +
+  ggtitle("rad hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h8 <- raw %>%
+  ggplot(aes(tax)) +
+  geom_histogram(bins = 20) +
+  ggtitle("tax hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h9 <- raw %>%
+  ggplot(aes(ptratio)) +
+  geom_histogram(bins = 20) +
+  ggtitle("ptratio hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h10 <- raw %>%
+  ggplot(aes(lstat)) +
+  geom_histogram(bins = 20) +
+  ggtitle("lstat hist")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+h11 <- raw %>%
+  ggplot(aes(medv)) +
+  geom_histogram(bins = 20) +
+  ggtitle("medv hist")+
+  ggthemes::theme_fivethirtyeight() +
+  theme(legend.position = 'none')
+```
+
+# Data Exploration  
+In exploring the data we wanted to understand the following:  
+
+* Distributions of the variables to understand what transformations or variable re-coding makes sense.
+* Understand what variables seem to have a difference between the target groups.
+* Correlation matrix to figure out the covariance and multicollinearity between the predictor variables to help understand what interactions would make sense.
+
+We also looked at missing values and found that no column is missing any values. There is also not enough evidence to suggest that any value within column is a code for missing data. Therefore, we decided to keep all the data points.
+
+## Distribution
+Considering we are attempting to create a logistic regression we want to first check the distribution with the data of how many data points are above the median crime rate and how many are below the median crime rate.
+```{r, results='asis',fig.align='center'}
+kable(summary(raw$target_fact),col.names=c('Distribution'))
+```
+Looking at the table we see a fairly even distribution of the target variable with 50.9% of the neighborhoods crime rate below the median and 49.1% having a crime rate above the median.
+
+Next, we wanted to look at the distribution for all the numeric variables as well as the distribution of the other factor variable, `chas`.
+```{r, fig.align='center',fig.width = 7, fig.height = 7}
+h1+h2+h3+h4+h5+h6
+```
+```{r, fig.align='center',fig.width = 7, fig.height = 7}
+h7+h8+h9+h10+h11
+```
+
+Because we are attempting to create a logistic regression model normally distributed variables are not necessary as in a linear regression. Getting a general idea of the distributions allows us to start understanding the data. For example, the histograms plots for `tax` and `rad` seem to be very similar, which might suggest multicollinearity. Additionally, it might make sense to re-code some of the other variable like `zn` as binary variable. We will explore these ideas in the below sections. We also wanted to check the distribution of the data for the `chas` column.
+```{r, results='asis',fig.align='center'}
+kable(summary(raw$chas_fact),col.names=c('Distribution'))
+```
+Looking at the table above we see that 92.9% of the neighborhoods don't border a river and only 7.1% of neighborhoods border a river. This suggest the `chas` variable is not very useful for prediction and can be dropped from all models.
+
+
+```{r}
+# Chi Sq for chas variable
+chisq <- chisq.test(raw$chas_fact,raw$target_fact)
+
+# Boxplots for numeric variables
+p1 <- raw %>% 
+  ggplot(aes(target_fact,zn)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("zn")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p2 <- raw %>%
+  ggplot(aes(target_fact,indus)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("indus")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p3<-raw %>%
+  ggplot(aes(target_fact,nox)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("nox")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p4<-raw %>%
+  ggplot(aes(target_fact,rm)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("rm")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p5<-raw %>%
+  ggplot(aes(target_fact,age)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("age")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p6<-raw %>%
+  ggplot(aes(target_fact,dis)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("dis")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p7<-raw %>%
+  ggplot(aes(target_fact,rad)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("rad")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p8 <- raw %>%
+  ggplot(aes(target_fact,tax)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("tax")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p9 <- raw %>%
+  ggplot(aes(target_fact,ptratio)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("ptratio")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p10 <- raw %>%
+  ggplot(aes(target_fact,lstat)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("lstat")+
+  ggthemes::theme_fivethirtyeight()+
+  theme(legend.position = 'none')
+p11 <- raw %>%
+  ggplot(aes(target_fact,medv)) +
+  geom_boxplot(aes(fill=target_fact)) +
+  ggtitle("medv")+
+  ggthemes::theme_fivethirtyeight() +
+  theme(legend.position = 'none')
+```
+## Predictor variables vs Target
+
+Since the target variable is a factor variable we can use boxplots to get a sense of what the differences between groups are.
+Using the boxplots below, we can see the change in variable distributions that are associated with the target variable.
+```{r, fig.align='center',fig.width = 9, fig.height = 9}
+p1+p2+p3+p4+p5+p6
+```
+```{r, fig.align='center',fig.width = 9, fig.height = 9}
+p7+p8+p9+p10+p11
+```
+
+Examining the boxplots we can see that in almost all of the variables there seems to be a difference between the target groups. The only variable where it seems minimal is `rm`. This suggests the variable will not be a great predictor for the target.
+
+Furthermore, to double check that our assumption to drop the `chas` variable was correct.
+```{r, results='asis',fig.align='center'}
+kable(table(raw$chas_fact,raw$target_fact))
+```
+There is not much difference between the percent of neighborhoods without a river border between neighborhoods with below median crime rates, 94.9%, and neighborhoods with above median crime rates, 90.8%. Furthermore, running a $\chi^2$ test we see that there is no difference between the `chas` groups with a p-value of `r round(chisq$p.value,3)`. This suggests that remove the `chas` variable was the correct decision.
+
+## Covariance & Collinearity
+```{r, include = F}
+#create correlation matrix
+correlation <- cor(raw[,-c(14,15)])
+
+#convert matrix to list for sorting
+cormtx <- cor(raw[,-c(14,15)],use = "pairwise")
+
+df.corr.pw<-reshape2::melt( cbind(
+  V1=rownames(cormtx), 
+  as.data.frame(cormtx))
+)
+
+df_corr_pw <- subset(df.corr.pw,value!=1)
+tied_vars <- df_corr_pw%>%
+  group_by(value)%>%
+  summarise(V1 = max(V1), variable = min(as.character(variable)))%>%
+  arrange(desc(abs(value)))
+
+# Creating collinearity plots
+rt <- raw %>%
+  ggplot(aes(rad,tax,color=target_fact)) +
+  geom_point() +
+  geom_smooth(method='lm',se=F) +
+  ggtitle("rad and tax relationship") +
+  xlab('rad') +
+  ylab('tax') +
+  theme_bw()
+
+dn <- raw %>%
+  ggplot(aes(log(dis),log(nox),color=target_fact)) +
+  geom_point() +
+  geom_smooth(method='lm',se=F) +
+  ggtitle("nox and dis relationship") +
+  xlab('dis logged') +
+  ylab('nox logged') +
+  theme_bw()
+
+mr <- raw %>%
+  ggplot(aes(medv,rm,color=target_fact)) +
+  geom_point() +
+  geom_smooth(method='lm',se=F) +
+  ggtitle("medv and rm relationship") +
+  xlab('medv') +
+  ylab('rm') +
+  theme_bw()
+```
+One of the assumptions with logistic regression is that there is no collinearity within the independent variables. We will address these issues in the following section.
+
+The first step is to understand the covariance. Covariance is not an issue in itself, but a correlation matrix helps us understand which variables need to be explored further.
+```{r, results='asis',fig.align='center',fig.width=10,fig.height=7.5}
+corrplot.mixed(correlation, tl.col = 'black', tl.pos = 'lt', number.cex= 11/ncol(raw))
+```
+
+The correlation matrix is a little hard to read so looking at the top 5 correlation coefficients and the associated variables will give us a better sense of the variables to check.
+```{r, results='asis'}
+kable(head(tied_vars,10),col.names = c('correlation','variable 1','variable 2'))
+```
+The table above suggest there might be collinearity between `rad` and `tax`, `nox` and `dis`, `nox` and `indus`, `dis` and `age`, and `medv` and `rm`. Let's take a closer look at `rad` and `tax`, `nox` and `dis`, and `medv` and `rm` variables.
+```{r, fig.align='center',fig.width = 8, fig.height = 4}
+rt
+```
+For the `rad` and `tax` plot, the regression line doesn't seem to fit the data perfectly, but with a correlation coefficient of `r round(cor(raw$rad,raw$tax),3)` we will have to deal with them.
+```{r, fig.align='center',fig.width = 8, fig.height = 4}
+dn
+```
+For the `dis` and `nox` variables, we see a much clearer pattern. With the clear relationship and a correlation coefficient of `r round(cor(raw$dis,raw$nox),3)`, we will also have to figure out a way to deal with this relationship.
+```{r, fig.align='center',fig.width = 8, fig.height = 4}
+mr
+```
+Finally, `medv` and `rm` have a lower correlation coefficient with `r round(cor(raw$medv,raw$rm),3)`, but it makes theoretical sense that they would be correlated. The more rooms in a house the higher the value increases.
+
+# Data Prep
+```{r}
+# Create the prep_df
+prep_df <- as.data.frame(raw)
+```
+In this section we will prepare the data for our modeling.
+
+## Re-Coding
+```{r}
+# Create histograms by target variable
+ht1 <- prep_df %>%
+  ggplot(aes(x=zn, fill=target_fact)) +
+  geom_histogram(bins=25, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("by target") +
+  ggthemes::theme_fivethirtyeight()
+
+ht9 <- prep_df %>%
+  ggplot(aes(x=rad, fill=target_fact)) +
+  geom_histogram(bins=25, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("by target") +
+  ggthemes::theme_fivethirtyeight()
+
+ht5 <- prep_df %>%
+  ggplot(aes(x=age, fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("by target") +
+  ggthemes::theme_fivethirtyeight()
+
+ht7 <- prep_df %>%
+  ggplot(aes(x=rad, fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("by target") +
+  ggthemes::theme_fivethirtyeight()
+# Creating the re-coded variables
+## age
+prep_df$age_fact <- ifelse(prep_df$age <= median(prep_df$age),0,1)
+prep_df$age_fact<- as.factor(prep_df$age_fact)
+levels(prep_df$age_fact) <- c("Below median age","Above median age")
+## zn
+prep_df$zn_fact <- ifelse(prep_df$zn == 0,0,1)
+prep_df$zn_fact<- as.factor(prep_df$zn_fact)
+levels(prep_df$zn_fact) <- c("No large lot","Large lot")
+## rad
+prep_df$rad_fact <- ifelse(prep_df$rad > mean(prep_df$rad),'above mean rad','<= mean rad')
+prep_df$rad_fact <- factor(prep_df$rad_fact)
+```
+`zn` was one of the variables of interest for re-coding. Let's take a closer look at the histogram and compare it to a histogram of `zn` by target variable.
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+h1+ht1
+```
+We can see that almost all of the neighborhoods with above median crime rates have no land zoned for large lots, while there is more distribution of the proportion of land zoned for large lots for neighborhoods with below median crime rates.
+```{r, results='asis',fig.align='center'}
+kable(table(prep_df$zn_fact,prep_df$target_fact))
+```
+In fact, looking at the table above, we can see how large the split is for neighborhoods above the median crime rate, with 93.4% having no land zoned for large lots. it's worth attempting to re-code this variable as it might help our final model make predictions.
+
+Another variable that looked interesting was the `age` variable. Let's compare the two histograms, the first without splitting by target variable and the second grouping by target variable.
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+h5+ht5
+```
+Not grouping by the target variable we can see a bimodal histogram. Grouping by target variable makes the bimodal distribution more interesting as the first peak seems to account for most of the neighborhoods below the median crime rate and the second peak is made up of mostly neighborhoods above the median crime rate.
+Let's re-code the age variable to a factor variable with two levels, below median age and above median age.
+```{r, results='asis',fig.align='center'}
+kable(table(prep_df$age_fact,prep_df$target_fact))
+```
+Looking at the frequency table above, re-coding the age variable has a clear split between groups. 80.8% of neighborhoods with above median crime rate also have an above median proportion of owner-occupied units built prior to 1940. Conversely, 79.7% of neighborhoods below the median crime rate have a below median proportion of owner-occupied units built prior to 1940.
+
+Another variable that makes sense to re-code is `rad`.
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+h7+ht7
+```
+Looking at the original histogram we see that a lot of the neighborhoods have a rad index of 24. By also examining the histogram grouped by target variable we see that all almost all the values above the mean are neighborhoods with above median crime rate.
+```{r, results='asis',fig.align='center'}
+kable(table(prep_df$rad_fact,prep_df$target_fact))
+```
+Examining the table of the new `rad_fact` variable with the `target_fact` variable we see that all of the neighborhoods below the median crime rate fall below the mean rad index, while 52.8% of the neighborhoods with above median crime rates also have an above the mean rad index.
+
+## Transformations
+```{r}
+# create nox PPK
+prep_df$nox_parts <- prep_df$nox*1e2
+
+# Create log of dis
+prep_df$log_dis <- log2(prep_df$dis)
+
+h6<-prep_df %>%
+  ggplot(aes(dis,fill=target_fact)) +
+  geom_histogram(bins = 20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("dis")+
+  theme_fivethirtyeight()
+
+dh <- prep_df %>%
+  ggplot(aes(x=log_dis,fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("& log(dis) histogram by target") +
+  ggthemes::theme_fivethirtyeight()
+
+db <- prep_df %>%
+  ggplot(aes(x=target_fact,y=log_dis,fill=target_fact)) +
+  geom_boxplot() +
+  ggtitle("& log(dis) boxplot by target") +
+  ggthemes::theme_fivethirtyeight()
+```
+### nox PPM to PPH
+Transforming the `nox` PPM to a smaller unit such as PPH will help with understanding the odd factors of the regressions.
+```{r}
+nox_ppm_model <- glm(target_fact~nox,prep_df,family = 'binomial')
+nox_pph_model <- glm(target_fact~nox_parts,prep_df,family = 'binomial')
+nox_df <- data.frame(model = c('nox pp10m model','nox pph model'),
+                     odds_factor = c(exp(coef(nox_ppm_model))[2],exp(coef(nox_pph_model))[2]))
+rownames(nox_df) <- NULL
+```
+```{r}
+kable(nox_df)
+```
+Quickly looking at odds factor for a logit model using `target` and `nox`, the original value of PP10M would be interpreted as, for every 10M parts of nitrogen oxide in the air crime increases `r comma_format(accuracy = 12)(c(exp(coef(nox_ppm_model))[2]))` fold, an incomprehensible number. But when we convert the `nox` variable to PPH we can see the odds factor become much easier to understand, for every 100 parts of nitrogen oxide in the air we increase our odds of being in a neighborhood with above median crime rate by `r round(exp(coef(nox_pph_model))[2],3)` fold.
+
+### log(dis)
+
+Another variable that makes sense to transform is `dis`. 
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+h6+dh
+```
+Taking the log of dis will give it a more normal distribution, as seen in the histograms above. We also see a much clearer break within the groups than we did with the original variable. 
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+p6+db
+```
+Transforming the `dis` variable does not alter the variance within the target groups. The median of `dis` for neighborhoods below median crime rates was 2.41 times larger than neighborhoods above median crime rates. Similarly, the median of `log_dis` for neighborhoods below median crime rates was 2.17 times larger than neighborhoods above median crime rates. Additionally, we wont lose too much interpretability when looking at the odds factor by transforming `dis`.
+
+# Interactions
+```{r}
+# nox as a proportion of dis 
+prep_df$nox_dis_ratio <- prep_df$nox_parts/prep_df$dis
+
+ndh <- prep_df %>%
+  ggplot(aes(x=nox_dis_ratio,fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("nox parts/dis histogram & ") +
+  ggthemes::theme_fivethirtyeight()
+
+ndb <- prep_df %>%
+  ggplot(aes(x=target_fact,y=nox_dis_ratio,fill=target_fact)) +
+  geom_boxplot() +
+  ggtitle("boxplot by target") +
+  ggthemes::theme_fivethirtyeight()
+
+# medv as a proportion of rm 
+prep_df$medv_rm_ratio <- prep_df$medv/prep_df$rm
+
+mrh <- prep_df %>%
+  ggplot(aes(x=medv_rm_ratio,fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("medv/rm histogram & ") +
+  ggthemes::theme_fivethirtyeight()
+
+mrb <- prep_df %>%
+  ggplot(aes(x=target_fact,y=medv_rm_ratio,fill=target_fact)) +
+  geom_boxplot() +
+  ggtitle("boxplot by target") +
+  ggthemes::theme_fivethirtyeight()
+
+# Ratio of tax by rad
+prep_df$tax_rad_int <- prep_df$tax*prep_df$rad
+
+trh <- prep_df %>%
+  ggplot(aes(x=tax_rad_int,fill=target_fact)) +
+  geom_histogram(bins=20, color="#e9ecef", alpha=0.6, position = 'identity') +
+  ggtitle("Tax:rad histogram & ") +
+  ggthemes::theme_fivethirtyeight()
+
+trb <- prep_df %>%
+  ggplot(aes(x=target_fact,y=tax_rad_int,fill=target_fact)) +
+  geom_boxplot() +
+  ggtitle("boxplot by target") +
+  ggthemes::theme_fivethirtyeight()
+```
+In this section we will be interacting `nox_parts` and `dis` using division, `medv` and `rm` using division, and finally `tax` and `rad` using multiplication.
+
+### nox & dis
+The first pair of variables to interact are the  `nox_parts` and `dis`. An interaction here makes sense not only because of the high correlation between the two variables, but also because the air would be more polluted the closer a neighborhood is to an employment center.
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+ndh+ndb
+```
+There's a clear difference between crime rate groups and the ratio of nox parts to distance from an employment center. The median rate for neighborhoods with above median crime rate is `r round(median(subset(prep_df,target_fact=='above median')$nox_dis_ratio),1)` PPH for a distance unit from an employment center, compared to `r round(median(subset(prep_df,target_fact=='below median')$nox_dis_ratio),1)` in below median crime rate neighborhoods. This interaction preserves the relationship the original variables had with the target, and gets rid of any collinearity by combining the two variables.
+
+### medv & rm
+Next we will interact the `medv` and `rm` variables. This interaction makes theoretical sense as stated before, more rooms should mean higher value.
+```{r, fig.align='center',fig.width = 9, fig.height = 4}
+mrh+mrb
+```
+There seems to be a slight difference between the median house value per \$1,000 per room between the target variable groups. Neighborhoods with below median crime rates tend to have higher median house value per room with a value of \$`r comma_format(accuracy = 4)(median(subset(prep_df,target_fact=='below median')$medv_rm_ratio)*1e3)`per average number of rooms compared to \$`r comma_format(accuracy = 4)(median(subset(prep_df,target_fact=='above median')$medv_rm_ratio)*1e3)` per average number of rooms for neighborhoods with above median crime rates.
+
+### tax & rad
+Another method to deal with collinearity is to interact two highly correlated terms. It makes sense to interact `tax` and `rad` since they were the two most correlated variables,0.906, in the data, and had almost identical histograms.
+```{r, fig.align='center',fig.width = 8, fig.height = 4}
+trh+trb
+```
+After interacting the terms we see that the new variables histogram and boxplot graphs are nearly identical to the tax and rad histograms and boxplots from earlier. 
+
+# Building Models
+```{r}
+model_df <- prep_df[,-c(3,13,14)]
+# set.seed(12345)
+set.seed(1234567890)
+trainRows <- sample(nrow(model_df),as.integer(nrow(model_df)*0.80))
+train_df = model_df[trainRows,]
+test_df = model_df[-trainRows,]
+
+predicted_percent <- 0.5
+```
+To build models we will take the following steps:
+
+* Start with all the original values
+* Use stepwise regression with backward direction to find the model with the best AIC using the original variables
+* Run a regression using the newly re-coded variables
+* Run a stepwise regression with backward direction to find the model with best AIC
+* Run a regression using the newly transformed variables
+* Run a stepwise regression with backward direction to find the model with best AIC
+* Run a regression with just the interaction terms
+* Run a stepwise regression with forward direction to get the model with the best AIC
+* Take the information and create 3 thought out models to compare as our final models
+
+## Base model
+```{r, include = F}
+model1 <- glm(target_fact ~ .,train_df[,c(1:12)],family='binomial')
+test_df$predicted1 <- factor(ifelse(predict(model1,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted1) <- c("below median","above median")
+#
+cm_model1 <- confusionMatrix(factor(test_df$predicted1), test_df$target_fact,"above median")
+#
+results <- tibble(model = "model1: base variables",
+                  predictors = length(coef(model1))-1,
+                  precision = cm_model1$byClass[5],
+                  auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                predictor = as.numeric(test_df$predicted1)))[1],
+                  AIC = model1$aic, BIC = BIC(model1))
+
+#Stepwise model1 backward
+model2 <- step(model1,direction = 'backward',trace=0)
+test_df$predicted2 <- factor(ifelse(predict(model2,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted2) <- c("below median","above median")
+#
+cm_model2 <- confusionMatrix(factor(test_df$predicted2), test_df$target_fact,"above median")
+#
+results2 <- tibble(model = "model2: model 1 stepwise",
+                   predictors = length(coef(model2))-1,
+                   precision = cm_model2$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted2)))[1],
+                   AIC = model2$aic, BIC = BIC(model2))
+
+results <- rbind(results,results2)
+```
+This is our baseline model. Without any data munging, we get a sense of how the data performs at predicting the target.
+```{r, results='asis', echo=F}
+stargazer(model1,model2,
+          type = "latex",align = TRUE,no.space=TRUE,digits = 4,
+          title="Base model results",
+          column.labels = c("(1)Original Vars","(2)Model 1 with stepwise"),
+          colnames = FALSE,model.numbers = FALSE,dep.var.caption = " ",
+          dep.var.labels = "Above Median Crime Rate",header = FALSE,
+          single.row = F,font.size = "scriptsize")
+```
+Let's take a closer look at some diagnostic statistics.
+```{r}
+kable(results, digits = 2)
+```
+Model 1 and Model 2 seem to predict the target variables extremely well with an AUC of `r round(cm_model1$byClass[11],3)` and `r round(cm_model2$byClass[11],3)`, respectively. Model 2 does, however, have a better AIC score indicating a better fit. Next, we will look at our tranformation models.
+\newpage
+
+## Re-coded vars model
+```{r, include = F}
+model3 <- glm(target_fact ~.,train_df[,c(2:4,6,8,9:15)],family='binomial')
+test_df$predicted3 <- factor(ifelse(predict(model3,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted3) <- c("below median","above median")
+#
+cm_model3 <- confusionMatrix(factor(test_df$predicted3), test_df$target_fact,"above median")
+#
+results3 <- tibble(model = "model3: re-coded vars",
+                   predictors = length(coef(model3))-1,
+                   precision = cm_model3$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted3)))[1],
+                   AIC = model3$aic, BIC = BIC(model3))
+#
+results <- rbind(results,results3)
+
+model4 <- step(model3,direction='backward',trace=0)
+test_df$predicted4 <- factor(ifelse(predict(model4,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted4) <- c("below median","above median")
+#
+cm_model4 <- confusionMatrix(factor(test_df$predicted4), test_df$target_fact,"above median")
+#
+results4 <- tibble(model = "model4: model3 stepwise",
+                   predictors = length(coef(model4))-1,
+                   precision = cm_model4$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted4)))[1],
+                   AIC = model4$aic, BIC = BIC(model4))
+#
+results <- rbind(results,results4)
+```
+Model 3 looks at a baseline for the re-coded variables. Running a stepwise on Model 3 does seem to improve the AIC value, meaning Model 4 fits the data better, while using less predictors. Additionally, we don't see a decrease in AUC score between Model 3 and Model 4. 
+```{r, results='asis'}
+stargazer(model3,model4,
+          type='latex',align = TRUE,no.space=TRUE,digits = 4,
+          title="Models with re-codede vars",
+          column.labels = c("(3)Re-Coded Vars","(4)Model 3 Stepwise"),
+          colnames = FALSE, model.numbers = FALSE, dep.var.caption = " ",
+          dep.var.labels = "Target Variable", header = FALSE, se = NULL,
+          font.size = "scriptsize", single.row = F)
+```
+```{r}
+kable(results[c(3,4),],digits = 2)
+```
+However, Model 4 did not perform better than Model 2 as the AUC dropped from `r round(cm_model2$byClass[11],3)` for Model 2 to `r round(cm_model4$byClass[11],3)` and the AIC increased by `r round(model4$aic - model2$aic,1)` from and AIC of `r round(model2$aic,1)` for Model 2 to `r round(model4$aic,1)` for Model 4.
+\newpage
+
+## Transformation Models
+```{r, include = F}
+model5 <- glm(target_fact ~ .,train_df[,c(1,2,4,5,7:12,16,17)],family='binomial')
+test_df$predicted5 <- factor(ifelse(predict(model5,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted5) <- c("below median","above median")
+#
+cm_model5 <- confusionMatrix(test_df$predicted5, test_df$target_fact,"above median")
+#
+results5 <- tibble(model = "model5: transformed vars",predictors = length(coef(model5))-1,
+                  precision = cm_model5$byClass[5],
+                  auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                predictor = as.numeric(test_df$predicted5)))[1],
+                  AIC = model5$aic, BIC = BIC(model5))
+#
+results <- rbind(results,results5)
+
+model6 <- step(model5,direction='backward',trace=0)
+test_df$predicted6 <- factor(ifelse(predict(model6,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted6) <- c("below median","above median")
+#
+cm_model6 <- confusionMatrix(test_df$predicted6, test_df$target_fact,"above median")
+#
+results6 <- tibble(model = "model6: model5 stepwise",
+                   predictors = length(coef(model6))-1,
+                   precision = cm_model6$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted6)))[1],
+                   AIC = model6$aic, BIC = BIC(model6))
+#
+results <- rbind(results,results6)
+```
+To get a sense of how our transformed variables performed we ran a regression substituting the originals with the transformed. Similarly to our previous models the stepwise regression provided us with the model with the best fit, meaning Model 6 performs better than Model 5.
+```{r, results='asis'}
+stargazer(model5,model6,
+          type='latex',align = TRUE,no.space=TRUE,digits = 4,
+          title="Models with transformed variables",
+          column.labels = c("(5)Transformed Vars","(6)Model 5 Stepwise"),
+          colnames = FALSE, model.numbers = FALSE, dep.var.caption = " ",
+          dep.var.labels = "Target Variable", header = FALSE, se = NULL,
+          font.size = "scriptsize", single.row = F)
+```
+```{r, results='asis'}
+kable(results[c(5,6),],digits = 2)
+```
+Looking at more diagnostic statistics we see that even though Model 6 was a better fit to the data with an AIC of `r round(model6$aic,2)` compared to `r round(model5$aic,2)`, both models had an equal precision of `r round(cm_model5$byClass[5],2)`.
+\newpage
+
+## Interaction term
+```{r, include = F}
+model7 <- glm(target_fact ~ .,train_df[,c(1:12,18:20)],family='binomial')
+test_df$predicted7 <- factor(ifelse(predict(model7,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted7) <- c("below median","above median")
+#
+cm_model7 <- confusionMatrix(test_df$predicted7, test_df$target_fact,"above median")
+#
+results7 <- tibble(model = "model7: interaction terms",
+                   predictors = length(coef(model7))-1,
+                   precision = cm_model7$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted7)))[1],
+                   AIC = model7$aic, BIC = BIC(model7))
+#
+results <- rbind(results,results7)
+
+model8 <- step(model7, direction="backward", trace=0)
+test_df$predicted8 <- factor(ifelse(predict(model8,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted8) <- c("below median","above median")
+#
+cm_model8 <- confusionMatrix(test_df$predicted8, test_df$target_fact,"above median")
+#
+results8 <- tibble(model = "model8: model7 stepwise",
+                   predictors = length(coef(model8))-1,
+                   precision = cm_model8$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted8)))[1],
+                   AIC = model8$aic, BIC = BIC(model8))
+#
+results <- rbind(results,results8)
+```
+In this section we are checking how the interaction terms perform within a model by first taking the original variables and adding the interaction terms and then by running a stepwise regression to get the results with the best AIC measure. Model 8 seems to be a very strong model with the lowest AIC we've seen so far at `r round(model8$aic,2)`. Let's taker a closer look at these two models.
+```{r, results='asis'}
+stargazer(model7,model8,
+          type='latex',align = TRUE,no.space=TRUE,digits = 4,
+          title="Models with interaction terms",
+          column.labels = c("(7)Interaction Terms","(8)Model 7 Stepwise"),
+          colnames = FALSE, model.numbers = FALSE, dep.var.caption = " ",
+          dep.var.labels = "Target Variable", header = FALSE, se = NULL,
+          font.size = "scriptsize", single.row = F)
+```
+```{r, results='asis'}
+kable(results[c(7,8),],digits = 2)
+```
+Based on the diagnostic measures, the precision and AUC scores are identical for both models. If we were to pick one, however, it would have to be model 8 as the AIC score is `r round(model7$aic-model8$aic,2)` smaller than Model 7's AIC.
+\newpage
+
+## Combined models
+```{r, include = F}
+model9 <- glm(target_fact ~ .,train_df[,c(7:9,12:14,16,17,19)],family='binomial')
+test_df$predicted9 <- factor(ifelse(predict(model9,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted9) <- c("below median","above median")
+#
+cm_model9 <- confusionMatrix(test_df$predicted9, test_df$target_fact,"above median")
+
+results9 <- tibble(model = "model9: combining vars 1",
+                   predictors = length(coef(model9))-1,
+                   precision = cm_model9$byClass[5],
+                   auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                 predictor = as.numeric(test_df$predicted9)))[1],
+                   AIC = model9$aic, BIC = BIC(model9))
+
+results <- rbind(results,results9)
+
+model10 <- glm(target_fact ~ .,train_df[, c(7,12:14,16,17,19)],family='binomial')
+test_df$predicted10 <- factor(ifelse(predict(model10,test_df,type="response") > predicted_percent,1,0))
+levels(test_df$predicted10) <- c("below median","above median")
+#
+cm_model10 <- confusionMatrix(test_df$predicted10, test_df$target_fact,"above median")
+#
+results10 <- tibble(model = "model10: combined vars model 2",
+                    predictors = length(coef(model10))-1,
+                    precision = cm_model10$byClass[5],
+                    auc = auc(roc(response = as.numeric(test_df$target_fact),
+                                  predictor = as.numeric(test_df$predicted10)))[1],
+                    AIC = model10$aic, BIC = BIC(model10))
+#
+results <- rbind(results,results10)
+```
+Taking all the information from the previous models we will try and build 2 models to best fit the data and make the most precise predictions. In the first model we will use the following variables: `rad`, `tax`, `ptratio`, `age_fact`, `zn_fact`, `nox_parts`, `log_dis`, `medv_rm_ratio`. In the second model we are dropping the `ptratio` and `tax` columns to deal with some of the multicollinearity that they cause.
+Quickly looking AIC we see that model 10 is worse than model 9, with and AIC score `r round(model10$aic-model9$aic,2)` greater than model 9.
+```{r, results='asis'}
+stargazer(model9,model10,
+          type='latex', align = TRUE, no.space=TRUE, digits = 3,
+          title="Combined model results",
+          column.labels = c("(9)Combined vars 1","(10)Combined vars 2"),
+          colnames = FALSE, model.numbers = FALSE, dep.var.caption = " ",
+          dep.var.labels = "Target Variable", header = FALSE, se = NULL,
+          font.size = "scriptsize", single.row = F, digits.extra = 3)
+```
+```{r, results='asis'}
+kable(results[c(9,10),],digits = 2)
+```
+Examining some of the other diagnostic measures we would come to the same conclusion since model 10's scores are worse than model 9's except for BIC. However, I would suggest that model 10 might be better off than model 9 because it deals with more of the multicullinearity in the data. If we consider the correlation coefficients of both `rad` and `tax` and `ptratio` and `medv`, `r round(cor(raw$rad,raw$tax),3)` and `r round(cor(raw$ptratio,raw$medv),3)` respectfully, then removing `tax` and `ptratio` makes theoretical sense. For this reason, Model 10 might perform better with new data.
+
+# Choose Model
+
+The first thing we want to do is narrow down the models we want to compare. Below are all the models we built and some of their diagnostic measures. We will compare model 2, the stepwise regression of all the original variables, with model 6, model 8, and model 10. We did not select any model with just the re-coded variables as the re-coded model with the lowest AIC was `r round(model4$aic-model10$aic,2)` higher than the model in our comparison selection with the highest AIC.
+```{r, results='asis'}
+kable(results[c(2,6,8,10),],caption = 'Diagnostic measures for models to compare')
+```
+Looking at these statistics we should select model 8 as our best model. It has the lowest AIC, the highest precision score and the highest auc score. Before we select this model, however, lets take a look at their ROC curves and VIF values.
+
+## Roc
+```{r, include = F}
+all_roc_df <- data.frame(
+  model = c(rep('model 2',nrow(test_df)),rep('model 6',nrow(test_df)),
+            rep('model 8',nrow(test_df)),rep('model 10',nrow(test_df))),
+  truth = rep(test_df$target_fact,4),
+  below_median = c(1-predict(model2,test_df,type='response'),1-predict(model6,test_df,type='response'),
+                   1-predict(model8,test_df,type='response'),1-predict(model10,test_df,type='response')),
+  above_median = c(predict(model2,test_df,type='response'),predict(model6,test_df,type='response'),
+                   predict(model8,test_df,type='response'),predict(model10,test_df,type='response')),
+  predicted = c(test_df$predicted2,test_df$predicted6,test_df$predicted8,test_df$predicted10))
+
+all_roc_df$predicted <- as.factor(all_roc_df$predicted)
+levels(all_roc_df$predicted) <- c("below median crime rate","above median crime rate")
+
+roc2 = roc_curve(subset(all_roc_df,model=='model 2'), truth, below_median)
+roc6 = roc_curve(subset(all_roc_df,model=='model 6'), truth, below_median)
+roc8 = roc_curve(subset(all_roc_df,model=='model 8'), truth, below_median)
+roc10 = roc_curve(subset(all_roc_df,model=='model 10'), truth, below_median)
+
+roc_df <- data.frame(
+  model = c(rep('model 2',nrow(test_df)+2),rep('model 6',nrow(test_df)+2),
+            rep('model 8',nrow(test_df)+2),rep('model 10',nrow(test_df)+2)),
+  specificity = c(roc2$specificity,roc6$specificity,roc8$specificity,roc10$specificity),
+  sensitivity = c(roc2$sensitivity,roc6$sensitivity,roc8$sensitivity,roc10$sensitivity))
+
+undershade <- data.frame(x=seq(0,1,0.20),
+                         y=seq(0,1,0.20))
+label <- data.frame(model = unique(roc_df$model), labels = results[c(2,6,8,10),"auc"], x = 0.7, y = 0.3)
+
+roc_df$model <- as.factor(roc_df$model)
+levels(roc_df$model) <- c("model 2","model 6","model 8","model 10")
+```
+```{r, results='asis',fig.align='center',fig.width=4,fig.height=4}
+roc_df %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_polygon(alpha=0.25,position='identity') +
+  geom_ribbon(data=undershade,aes(x=x,y=y,xmin = 0, xmax = x, ymin = 0, ymax = y),alpha=0.25,inherit.aes = F) +
+  # geom_text(data=label,aes(x=x,y=y,label=paste('AUC:',round(labels,2))),inherit.aes = F) +
+  geom_label(data=label,aes(x=x,y=y,label=paste('AUC:',round(auc,4))),size=2.8,fontface = "bold",inherit.aes = F) +
+  geom_path() +
+  geom_abline(size = 0.8, lty = 2,slope = 1,intercept = 0,color='blue') +
+  # geom_area(aes(x = 1 - specificity, y = sensitivity),alpha=0.25,position = 'identity') +
+  scale_x_continuous(breaks = seq(0, 1, 0.20), labels = percent_format(accuracy = 1)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.20), labels = percent_format(accuracy = 1)) +
+  labs(x = "False Positive Rate", y = "Sensitivity (True Positive Rate)")+
+  ggthemes::theme_fivethirtyeight() +
+  facet_wrap(~as.factor(model))
+```
+Examining the ROC curves doesn't help us narrow down which model could preform better on new data. All the curves look similar and we already compared AUC scores in the previous section noting that model 8 had the highest AUC score with `r round(results[8,"auc"],3)`. The final metric to check to narrow down which model to check is the VIF scores.
+
+## Model VIF
+VIF is a measure of how much multicollinearity there is in a model. Usually anything above 5 should be considered and discussed, but anything above 10 would mean your model is not very effective. One of the assumptions of logistic regression is that there is little to no multicollinearity within the data. This is why transformations are vital.
+```{r}
+vif2 <- as.data.frame(t(t(VIF(model2))))
+colnames(vif2) <- 'model2'
+vif2$variables = rownames(vif2)
+rownames(vif2) <- NULL
+
+vif6 <- as.data.frame(t(t(VIF(model6))))
+colnames(vif6) <- 'model6'
+vif6$variables = rownames(vif6)
+rownames(vif6) <- NULL
+
+vif8 <- as.data.frame(t(t(VIF(model8))))
+colnames(vif8) <- 'model8'
+vif8$variables = rownames(vif8)
+rownames(vif8) <- NULL
+
+vif10 <- as.data.frame(t(t(VIF(model10))))
+colnames(vif10) <- 'model10'
+vif10$variables = rownames(vif10)
+rownames(vif10) <- NULL
+
+vif_all <- data.frame(
+  variables = unique(c(vif2$variables,vif6$variables,vif8$variables,vif10$variables))
+)
+
+vif_all <- merge(vif_all,vif2,by='variables',all.x=T)
+vif_all <- merge(vif_all,vif6,by='variables',all.x=T)
+vif_all <- merge(vif_all,vif8,by='variables',all.x=T)
+vif_all <- merge(vif_all,vif10,by='variables',all.x=T)
+vif_all <- vif_all[order(-vif_all$model2),]
+rownames(vif_all)<-NULL
+```
+```{r, results='asis'}
+kable(vif_all,caption = 'Model VIF Scores')
+```
+By examining the VIF score table above we see that `medv` has a VIF above 9 for model 2 and model 6, while it has a VIF score of over 100 for model 8. This suggests that dropping that variable and only using the interaction term of `medv_rm_ratio` is a better strategy. Additionally, model 10 is the only model that successfully keeps all the variable with a VIF below 5. Model 10 seems like the best theoretical model, which might suggest it would hold up better with newer data.
+\newpage
+
+## Marginal Model Plots
+The final thing we want to check with our selected model (model 10) are the marginal model plots. Each data line, that is, the line created for the response on the predictor, matches the model line, the line for the fitted values on the predictor. Since both lines match very closely the model can be determined to be adequate.
+```{r, results='asis', fig.align='center', fig.height=5,fig.width=5}
+mmps(model10,main=NULL)
+```
+
+# Conclusion
+```{r}
+final_cm <- cm_model10$table
+rownames(final_cm) <- c("Predicted Below Median","Predicted Above Median")
+
+final_evaluation <- as.data.frame(t(tibble(
+  accuracy = round(cm_model10$overall[1],5),
+  error_rate = 1-round(cm_model10$overall[1],5),
+  precision = round(cm_model10$byClass[5],5),
+  sensitivity = round(cm_model10$byClass[1],5),
+  specificity = round(cm_model10$byClass[2],5),
+  F1_score = round(cm_model10$byClass[7],5),
+  auc = round(cm_model10$byClass[11],5))))
+
+final_evaluation$Diagnostics <- rownames(final_evaluation)
+
+rownames(final_evaluation) <- NULL
+```
+```{r, results='asis'}
+kable(final_cm,
+      col.names = c("True Below Median","True Above Median"),
+      row.names = T,
+      caption = "Model 10: Confusion Matrix")
+```
+Looking at the confusion matrix and the diagnostic table we are happy with our chosen model. Yes, the precision is lower than some of the other models, but there were only 94 rows in our test data, with more data we might have been able to balance out the precision scores. Additionally, the AUC and AIC scores are not that much lower than the other models we looked at. Furthermore, our sensitivity is still above 90%. Therefore, we are happy with model 10 as our final model.
+```{r, results='asis'}
+kable(final_evaluation[,c(2,1)],col.names = c("Diagnostic","Model 10"),captions="Model 10 Diagnsostic Table")
+```
+
+## Predicting evaluation data
+```{r, message = F}
+#read data
+url = 'https://raw.githubusercontent.com/sbiguzzi/data621/main/crime-evaluation-data_modified.csv'
+raw_eval = read.csv(url)
+
+# create variables needed
+## age
+raw_eval$age_fact <- ifelse(raw_eval$age <= median(raw_eval$age),0,1)
+raw_eval$age_fact<- as.factor(raw_eval$age_fact)
+levels(raw_eval$age_fact) <- c("Below median age","Above median age")
+## zn
+raw_eval$zn_fact <- ifelse(raw_eval$zn == 0,0,1)
+raw_eval$zn_fact<- as.factor(raw_eval$zn_fact)
+levels(raw_eval$zn_fact) <- c("No large lot","Large lot")
+## nox PPK
+raw_eval$nox_parts <- raw_eval$nox*1e2
+## log_dis
+raw_eval$log_dis <- log2(raw_eval$dis)
+## medv_rm_ratio
+raw_eval$medv_rm_ratio <- raw_eval$medv/raw_eval$rm
+
+# run model
+raw_eval$target <- ifelse(
+  predict(model10,raw_eval,type="response") > predicted_percent,1,0)
+raw_eval$target_prob <- round(predict(model10,raw_eval,type="response"),3)
+
+#keep only needed variables
+write.csv(raw_eval[,c(1:12,18,19)],'./Group1_HW3.csv',row.names=F)
+```
+```{r,results='asis'}
+set.seed(100)
+kable(raw_eval[sample(nrow(raw_eval),10),c(1:12,18,19)],
+      caption = "Evaluation Data Predicted",
+      row.names = F)
+```
+

@@ -1,0 +1,102 @@
+---
+title: "DATA 609 HW 1"
+author: "Daniel Moscoe"
+date: "8/29/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1. Find the minimum of $f(x,y) = x^2 + xy + y^2$ in $(x,y) \in \mathbb{R}^2$.  
+
+*Response*. The minimum is $f(0,0) = 0$.  
+
+Stationary conditions:  
+
+$\frac{\partial f}{\partial x} = 2x + y = 0$  
+
+$\frac{\partial f}{\partial y} = 2y + x = 0$  
+
+Solving the pair of equations, we obtain $(x,y) = (0,0)$.  
+
+$\Delta = \text{det}(\boldsymbol{H}) = f_{xx}f_{yy} - f_{xy}^2 = 3$.  
+
+Since $\Delta > 0$, $(0,0)$ is the location of a local minimum. And since there are no other stationary points, $(0,0)$ is also the location of the global minimum for $f(x,y)$.  
+
+2. For $f(x) = x^4$ in $\mathbb{R}$, it has the global minimum at $x = 0$. Find its new minimum if a constraint $x^2 \geq 1$ is added.  
+
+*Response*. The minima of the function under the constraint are $f(-1) = 1$ and $f(1) = 1$.  
+
+Rearranging the constraint: $-x^2 + 1 \leq 0$.  
+
+$\Pi(x, \mu) = x^4 + \mu(-x^2 + 1)^2$.  
+
+$\Pi'(x) = 0$:
+\begin{align*}
+  4x^3 + 2\mu(-x^2 + 1)(-2x) &= 0 \\
+  x^3 + \mu x^3 - \mu x &= 0 \\
+  x(x^2 + \mu x^2 -\mu) &= 0 \rightarrow x = 0, \text{or} \\
+  x^2 + \mu x^2 - \mu &= 0 \\
+  x^2(1 + \mu) &= \mu \\
+  x^2 &= \frac{\mu}{1 + \mu} \\
+  x &= \pm \sqrt{\frac{\mu}{1 + \mu}} \\
+\end{align*}  
+
+As $\mu$ increases, $x$ approaches positive $1$ or negative $1$, the locations of the minima of the constrained function.  
+
+We can confirm that both these points are minima by checking the second derivative at these points.  
+
+$\left. f''(x) \right|_{x = -1} = \left. f''(x) \right|_{x = 1} = 12$.  
+
+Since the second derivative is positive at both these points, they represent minima.  
+
+\newpage
+
+3. Use a Lagrange multiplier to solve the optimization problem  
+$\text{min} \, f(x,y) = x^2 + 2xy + y^2$, subject to $y = x^2 - 2$.  
+
+*Response*. The minima of the function under the constraint are $f(-2,2) = 0$ and $f(1,-1) = 0$.  
+
+Form the Lagrangian: $\Pi = x^2 + 2xy + y^2 + \lambda (x^2 - y - 2)$.  
+
+Stationary conditions:  
+
+$\frac{\partial \Pi}{\partial x} = 2x + 2y + 2 \lambda x = 0$  
+
+$\frac{\partial \Pi}{\partial y} = 2x + 2y - \lambda = 0$  
+
+$\frac{\partial \Pi}{\partial \lambda} = x^2 - y - 2 = 0$  
+
+\begin{align*}
+  x + y + \lambda x &= 0 \\
+  (\lambda + 1)x + y &= 0 \\
+  y &= -(\lambda + 1) x \\
+\end{align*}
+
+\begin{align*} 
+  2x - 2x(\lambda + 1) - \lambda &= 0 \\
+  2x - 2 \lambda x - 2x - \lambda &= 0 \\
+  - \lambda (1 + 2x) &= 0 \\
+  \lambda = 0 \,\, &\text{or} \,\, x = -1/2 
+\end{align*}
+
+If $\lambda = 0$:
+
+\begin{align*}
+  2x + 2y &= 0 \\
+  y &= -x \\
+  \\
+  x^2 + x - 2 &= 0 \\
+  (x + 2)(x - 1) &= 0 \\
+  x = -2 \,\, \text{or} \,\, x = 1
+\end{align*}
+
+Therefore $(-2,2)$ and $(1,-1)$ are stationary points.  
+
+If $x = -1/2$ then $\left(\frac{-1}{2}, -1 \frac{3}{4} \right)$ is a stationary point.  
+
+$f\left(\frac{-1}{2}, -1 \frac{3}{4} \right) = 5 \frac{1}{16}$.  
+
+$f(-2,2) = f(1,-1) = 0$. So the minima of the function under the constraint occur at $(-2,2)$ and $(1,-1)$.
