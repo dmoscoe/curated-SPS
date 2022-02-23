@@ -1,6 +1,7 @@
 ###### Basic SQL in R
 - Use the package DBI in R to create and query a simple database using SQL.  
 - Create visualizations based on SQL queries.  
+- [view on RPubs](https://rpubs.com/dmoscoe/724515).  
 
 ###### Lubridate Vignette
 - Use a dataset on NY Bus Breakdowns and Delays to illustrate the functionality of the R package Lubridate.  
